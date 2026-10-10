@@ -1,0 +1,540 @@
+// Allegiance Facility Portal — data model.
+//
+// Scope note: this schema covers the full domain described in the portal
+// brief (Phase A deliverable). Only the facility-side features (Phase B)
+// are wired up to UI/auth in this pass — dispatch, billing, admin, and
+// messaging UIs come later, but their tables exist now so the schema
+// doesn't need reshaping when those phases land.
+//
+// Role model note: the brief's six roles split into two kinds. Three are
+// facility-scoped (FACILITY_ADMIN/SCHEDULER/VIEWER) and belong on
+// FacilityMembership. Three are internal Allegiance staff roles
+// (SUPER_ADMIN/DISPATCHER/BILLING) that aren't tied to any one facility,
+// so they live on User.internalRole instead of forcing every internal
+// staffer into a fake facility membership.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & access
+// ---------------------------------------------------------------------------
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum InternalRole {
+  SUPER_ADMIN
+  DISPATCHER
+  BILLING
+}
+
+enum FacilityRole {
+  FACILITY_ADMIN
+  FACILITY_SCHEDULER
+  FACILITY_VIEWER
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  REVOKED
+}
+
+model User {
+  id                 String       @id @default(uuid())
+  /// Populated once/if migrated to a managed auth provider (Clerk/Auth0/WorkOS).
+  identityProviderId String?      @unique
+  name               String
+  email              String       @unique
+  /// Null once migrated to a managed provider that owns credential storage.
+  passwordHash       String?
+  status             UserStatus   @default(INVITED)
+  /// Internal Allegiance staff role. Null for facility-side users.
+  internalRole       InternalRole?
+  /// Placeholder flag only — real TOTP enrollment is deferred to a managed
+  /// auth provider; see CLAUDE.md "Known limitations".
+  mfaEnabled         Boolean      @default(false)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  facilityMemberships  FacilityMembership[]
+  createdRideRequests  RideRequest[]          @relation("RideRequestCreatedBy")
+  assignedRideRequests RideRequest[]          @relation("RideRequestAssignedDispatcher")
+  dispatchAssignments  DispatchAssignment[]
+  statusEvents         RequestStatusEvent[]
+  sentMessages         RideMessage[]
+  auditEvents          AuditEvent[]
+  notificationEvents   NotificationEvent[]
+  reviewedCompanionReqs CompanionRequest[]
+}
+
+model Organization {
+  id        String             @id @default(uuid())
+  name      String
+  status    OrganizationStatus @default(ACTIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  facilities Facility[]
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum FacilityType {
+  HOSPITAL
+  SKILLED_NURSING
+  REHABILITATION
+  ASSISTED_LIVING
+  OUTPATIENT_CLINIC
+  OTHER
+}
+
+enum FacilityAccountStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+model Facility {
+  id             String                 @id @default(uuid())
+  organizationId String
+  name           String
+  facilityType   FacilityType
+  addressLine1   String
+  city           String
+  state          String
+  zip            String
+  phone          String
+  billingEmail   String
+  accountStatus  FacilityAccountStatus  @default(PENDING)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  memberships  FacilityMembership[]
+  patients     Patient[]
+  rideRequests RideRequest[]
+  ratePlans    FacilityRatePlan[]
+  invoices     Invoice[]
+  messages     RideMessage[]
+
+  @@index([organizationId])
+}
+
+model FacilityMembership {
+  id         String           @id @default(uuid())
+  userId     String
+  facilityId String
+  role       FacilityRole
+  status     MembershipStatus @default(INVITED)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id])
+  facility Facility @relation(fields: [facilityId], references: [id])
+
+  @@unique([userId, facilityId])
+  @@index([facilityId])
+}
+
+// ---------------------------------------------------------------------------
+// Patients
+// ---------------------------------------------------------------------------
+
+enum MobilityRequirement {
+  AMBULATORY
+  WHEELCHAIR
+}
+
+model Patient {
+  id                          String   @id @default(uuid())
+  facilityId                  String
+  name                        String
+  authorizedContactName       String?
+  authorizedContactPhone      String?
+  mobilityRequirements        MobilityRequirement
+  /// Short, structured note only (e.g. "uses a walker") — never diagnoses
+  /// or clinical/treatment information. See CLAUDE.md data-minimization note.
+  assistanceNotes             String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  facility     Facility      @relation(fields: [facilityId], references: [id])
+  rideRequests RideRequest[]
+
+  @@index([facilityId])
+}
+
+/// Single-row atomic counter backing nextPublicRequestNumber() — avoids a
+/// race between two concurrent submissions getting the same number.
+model RequestNumberCounter {
+  id    Int @id @default(1)
+  value Int @default(100)
+}
+
+// ---------------------------------------------------------------------------
+// Ride requests
+// ---------------------------------------------------------------------------
+
+enum ServiceType {
+  AMBULATORY
+  WHEELCHAIR
+  FACILITY_TRANSFER
+}
+
+enum TripType {
+  ONE_WAY
+  ROUND_TRIP
+}
+
+enum Urgency {
+  ROUTINE
+  URGENT
+  SAME_DAY
+}
+
+enum RideRequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  CHANGES_REQUESTED
+  CONFIRMED
+  DECLINED
+  IN_PROGRESS
+  COMPLETED
+  CANCELED
+  UNABLE_TO_COMPLETE
+}
+
+model RideRequest {
+  id                        String             @id @default(uuid())
+  /// Human-friendly reference shown to facility users, e.g. "ATS-000123".
+  publicRequestNumber       String             @unique
+  facilityId                String
+  patientId                 String
+  createdByUserId            String
+  serviceType               ServiceType
+  tripType                  TripType
+  appointmentDateTime        DateTime
+  requestedArrivalDateTime   DateTime?
+  status                     RideRequestStatus @default(DRAFT)
+  urgency                    Urgency           @default(ROUTINE)
+  companionRequested         Boolean           @default(false)
+  estimatedCompanionDuration Int?
+  additionalPassengers       Int               @default(0)
+  specialInstructions        String?
+  assignedDispatcherId       String?
+  externalDispatchReference  String?
+  /// Idempotency key from the submit form so a double-click/retry can't
+  /// create two requests. See src/lib/portal/rides.ts.
+  submissionKey              String?           @unique
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
+
+  facility           Facility              @relation(fields: [facilityId], references: [id])
+  patient            Patient               @relation(fields: [patientId], references: [id])
+  createdBy          User                  @relation("RideRequestCreatedBy", fields: [createdByUserId], references: [id])
+  assignedDispatcher User?                 @relation("RideRequestAssignedDispatcher", fields: [assignedDispatcherId], references: [id])
+  legs               RideLeg[]
+  companionRequest   CompanionRequest?
+  dispatchAssignments DispatchAssignment[]
+  statusEvents       RequestStatusEvent[]
+  messages           RideMessage[]
+
+  @@index([facilityId])
+  @@index([status])
+  @@index([assignedDispatcherId])
+}
+
+enum RideLegStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELED
+}
+
+model RideLeg {
+  id                    String        @id @default(uuid())
+  rideRequestId         String
+  /// 1 = outbound leg, 2 = return leg (round trips only).
+  sequence               Int
+  pickupAddressLine1      String
+  pickupCity              String
+  pickupState             String
+  pickupZip               String
+  destinationAddressLine1 String
+  destinationCity         String
+  destinationState        String
+  destinationZip          String
+  requestedPickupTime     DateTime
+  confirmedPickupTime     DateTime?
+  scheduledArrivalTime    DateTime?
+  status                  RideLegStatus @default(PENDING)
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  rideRequest RideRequest @relation(fields: [rideRequestId], references: [id])
+
+  @@unique([rideRequestId, sequence])
+}
+
+// ---------------------------------------------------------------------------
+// Recurring schedules
+// ---------------------------------------------------------------------------
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  SELECTED_WEEKDAYS
+}
+
+enum RecurringScheduleStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+  CANCELED
+}
+
+model RecurringSchedule {
+  id                      String                   @id @default(uuid())
+  facilityId              String
+  patientId               String
+  frequency               RecurrenceFrequency
+  /// Bitmask-free explicit list, e.g. ["MON","WED","FRI"].
+  weekdays                String[]
+  startDate               DateTime
+  endDate                 DateTime?
+  appointmentTime         String
+  serviceType             ServiceType
+  tripType                TripType
+  companionRequested      Boolean                  @default(false)
+  status                  RecurringScheduleStatus  @default(ACTIVE)
+  /// How many days ahead individual RideRequests get generated.
+  generationHorizonDays   Int                      @default(14)
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  exceptions RecurringScheduleException[]
+
+  @@index([facilityId])
+}
+
+model RecurringScheduleException {
+  id                  String   @id @default(uuid())
+  recurringScheduleId String
+  date                DateTime
+  /// true = skip generating a ride for this date.
+  isCanceled          Boolean  @default(true)
+  note                String?
+  createdAt           DateTime @default(now())
+
+  recurringSchedule RecurringSchedule @relation(fields: [recurringScheduleId], references: [id])
+
+  @@unique([recurringScheduleId, date])
+}
+
+// ---------------------------------------------------------------------------
+// Companion / transitional care
+// ---------------------------------------------------------------------------
+
+enum CompanionServiceType {
+  APPOINTMENT_ESCORT
+  TRANSITIONAL_CARE
+  OTHER
+}
+
+enum CompanionReviewStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+model CompanionRequest {
+  id                            String                 @id @default(uuid())
+  rideRequestId                 String                 @unique
+  companionServiceType          CompanionServiceType
+  requestedAssistance           String
+  estimatedDurationMinutes      Int?
+  pickupHandoffContactName      String?
+  pickupHandoffContactPhone     String?
+  destinationHandoffContactName String?
+  destinationHandoffContactPhone String?
+  postArrivalAssistanceRequested Boolean               @default(false)
+  postArrivalAssistanceNotes     String?
+  reviewStatus                   CompanionReviewStatus @default(PENDING)
+  reviewedByUserId                String?
+  reviewedAt                      DateTime?
+  createdAt                       DateTime              @default(now())
+  updatedAt                       DateTime              @updatedAt
+
+  rideRequest  RideRequest @relation(fields: [rideRequestId], references: [id])
+  reviewedBy   User?       @relation(fields: [reviewedByUserId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+model DispatchAssignment {
+  id            String   @id @default(uuid())
+  rideRequestId String
+  dispatcherId  String
+  assignedAt    DateTime @default(now())
+  note          String?
+
+  rideRequest RideRequest @relation(fields: [rideRequestId], references: [id])
+  dispatcher  User        @relation(fields: [dispatcherId], references: [id])
+
+  @@index([rideRequestId])
+}
+
+model RequestStatusEvent {
+  id             String             @id @default(uuid())
+  rideRequestId  String
+  previousStatus RideRequestStatus?
+  newStatus      RideRequestStatus
+  actorUserId    String
+  reason         String?
+  createdAt      DateTime           @default(now())
+
+  rideRequest RideRequest @relation(fields: [rideRequestId], references: [id])
+  actor       User        @relation(fields: [actorUserId], references: [id])
+
+  @@index([rideRequestId])
+}
+
+// ---------------------------------------------------------------------------
+// Messaging
+// ---------------------------------------------------------------------------
+
+model RideMessage {
+  id            String    @id @default(uuid())
+  /// Null for general facility<->dispatch coordination messages not tied
+  /// to one request.
+  rideRequestId String?
+  facilityId    String
+  senderUserId  String
+  isFromDispatch Boolean  @default(false)
+  body          String
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  rideRequest RideRequest? @relation(fields: [rideRequestId], references: [id])
+  facility    Facility     @relation(fields: [facilityId], references: [id])
+  sender      User         @relation(fields: [senderUserId], references: [id])
+
+  @@index([facilityId])
+  @@index([rideRequestId])
+}
+
+// ---------------------------------------------------------------------------
+// Billing foundation (read-only/disabled until real data exists — see
+// CLAUDE.md Phase E notes)
+// ---------------------------------------------------------------------------
+
+model FacilityRatePlan {
+  id               String   @id @default(uuid())
+  facilityId       String
+  name             String
+  ambulatoryBaseRate Decimal @db.Decimal(10, 2)
+  wheelchairBaseRate Decimal @db.Decimal(10, 2)
+  perMileRate        Decimal @db.Decimal(10, 2)
+  effectiveDate      DateTime
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  facility Facility @relation(fields: [facilityId], references: [id])
+
+  @@index([facilityId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  VOID
+}
+
+model Invoice {
+  id            String        @id @default(uuid())
+  facilityId    String
+  invoiceNumber String        @unique
+  periodStart   DateTime
+  periodEnd     DateTime
+  amountDue     Decimal       @db.Decimal(10, 2)
+  status        InvoiceStatus @default(DRAFT)
+  issuedAt      DateTime?
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  facility Facility @relation(fields: [facilityId], references: [id])
+
+  @@index([facilityId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit & notifications
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  /// Null for unauthenticated/system events (e.g. failed login attempts).
+  actorUserId String?
+  action      String
+  targetType  String
+  targetId    String?
+  /// Structured, non-clinical metadata only — never patient notes.
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  IN_APP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model NotificationEvent {
+  id                String              @id @default(uuid())
+  recipientUserId   String
+  channel           NotificationChannel
+  relatedRideRequestId String?
+  /// Minimal, non-PHI summary only (e.g. "Ride request updated") — the
+  /// recipient authenticates in-app to see details. See CLAUDE.md privacy
+  /// note under Phase D.
+  summary           String
+  status            NotificationStatus  @default(PENDING)
+  sentAt            DateTime?
+  createdAt         DateTime            @default(now())
+
+  recipient User @relation(fields: [recipientUserId], references: [id])
+
+  @@index([recipientUserId])
+}

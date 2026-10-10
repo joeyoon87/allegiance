@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+:root {
+  /* Brand colors extracted directly from the supplied vector logo artwork */
+  --color-gold: #ffc03f;
+  --color-gold-dark: #e8a81f;
+  --color-black: #0c0d0c;
+  --color-white: #ffffff;
+  --color-gray-50: #f5f6f7;
+  --color-gray-200: #e4e6e9;
+  --color-gray-500: #6b7280;
+  --color-charcoal: #202124;
+
+  --background: var(--color-white);
+  --foreground: var(--color-black);
+}
+
+@theme inline {
+  --color-gold: var(--color-gold);
+  --color-gold-dark: var(--color-gold-dark);
+  --color-ink: var(--color-black);
+  --color-charcoal: var(--color-charcoal);
+  --color-paper: var(--color-white);
+  --color-mist: var(--color-gray-50);
+  --color-line: var(--color-gray-200);
+  --color-slate: var(--color-gray-500);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --font-sans: var(--font-inter);
+  --font-heading: var(--font-manrope);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading);
+  letter-spacing: -0.01em;
+}
