@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { calculateEstimate } from "@/lib/pricing/calculate";
 import { Field, Select, TextInput } from "@/components/ui/fields";
 import { Button } from "@/components/ui/Button";
+import { API_BASE_URL } from "@/lib/api";
 
 type FormValues = {
   serviceType: "ambulatory" | "wheelchair" | "facilityTransfer";
@@ -66,7 +67,7 @@ export function EstimatorForm() {
       setLookup({ status: "loading" });
 
       try {
-        const res = await fetch("/api/distance", {
+        const res = await fetch(`${API_BASE_URL}/distance`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ origin: values.pickupAddress, destination: values.destinationAddress }),

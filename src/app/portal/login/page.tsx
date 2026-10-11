@@ -1,43 +1,38 @@
-import type { Metadata } from "next";
-import { AuthError } from "next-auth";
-import { redirect } from "next/navigation";
-import { signIn } from "@/auth";
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Container } from "@/components/ui/Container";
 import { Field, TextInput } from "@/components/ui/fields";
 import { Logo } from "@/components/brand/Logo";
 import { SITE } from "@/lib/constants";
+import { usePortalSession } from "@/lib/portal/session";
+import { ApiError } from "@/lib/api";
 
-export const metadata: Metadata = {
-  title: "Facility Portal Login",
-  description: "Login for approved Allegiance Transportation Services facility partners.",
-  robots: { index: false },
-};
+export default function PortalLoginPage() {
+  const { login } = usePortalSession();
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
-const ERROR_MESSAGES: Record<string, string> = {
-  invalid: "That email or password isn't right. Try again, or contact your facility admin.",
-  "no-access": "Your account doesn't have an active facility assigned yet. Contact Allegiance dispatch.",
-};
-
-export default async function PortalLoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ error?: string }>;
-}) {
-  const { error } = await searchParams;
-
-  async function login(formData: FormData) {
-    "use server";
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setPending(true);
     try {
-      await signIn("credentials", {
-        email: formData.get("email"),
-        password: formData.get("password"),
-        redirectTo: "/portal/dashboard",
-      });
+      await login(email, password);
+      router.push("/portal/dashboard");
     } catch (err) {
-      if (err instanceof AuthError) {
-        redirect("/portal/login?error=invalid");
-      }
-      throw err;
+      const apiErr = err as ApiError;
+      setError(
+        apiErr.status === 401
+          ? "That email or password isn't right. Try again, or contact your facility admin."
+          : "Something went wrong signing you in. Please try again.",
+      );
+    } finally {
+      setPending(false);
     }
   }
 
@@ -51,24 +46,34 @@ export default async function PortalLoginPage({
             Sign in to request transportation and manage your facility&rsquo;s rides.
           </p>
 
-          {error && (
-            <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
-              {ERROR_MESSAGES[error] ?? "Something went wrong signing you in."}
-            </p>
-          )}
+          {error && <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
 
-          <form action={login} className="mt-6 grid gap-4">
+          <form onSubmit={onSubmit} className="mt-6 grid gap-4">
             <Field label="Work Email" htmlFor="email" required>
-              <TextInput id="email" name="email" type="email" required placeholder="you@facility.org" />
+              <TextInput
+                id="email"
+                type="email"
+                required
+                placeholder="you@facility.org"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
             </Field>
             <Field label="Password" htmlFor="password" required>
-              <TextInput id="password" name="password" type="password" required />
+              <TextInput
+                id="password"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
             </Field>
             <button
               type="submit"
-              className="inline-flex items-center justify-center rounded-full bg-ink px-6 py-3 text-sm font-semibold text-paper transition-colors hover:bg-charcoal"
+              disabled={pending}
+              className="inline-flex items-center justify-center rounded-full bg-ink px-6 py-3 text-sm font-semibold text-paper transition-colors hover:bg-charcoal disabled:opacity-60"
             >
-              Log In
+              {pending ? "Signing in…" : "Log In"}
             </button>
           </form>
 

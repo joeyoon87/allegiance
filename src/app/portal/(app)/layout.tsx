@@ -1,7 +1,8 @@
+"use client";
+
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { signOut } from "@/auth";
-import { requireFacilitySession } from "@/lib/portal/permissions";
+import { usePathname, useRouter } from "next/navigation";
+import { usePortalGuard, usePortalSession } from "@/lib/portal/session";
 import { Logo } from "@/components/brand/Logo";
 import { FacilitySwitcher } from "@/components/portal/FacilitySwitcher";
 
@@ -15,13 +16,23 @@ const NAV_LINKS = [
   { href: "/portal/billing", label: "Billing", enabled: false },
 ] as const;
 
-export default async function PortalAppLayout({ children }: { children: React.ReactNode }) {
-  const { memberships } = await requireFacilitySession();
+export default function PortalAppLayout({ children }: { children: React.ReactNode }) {
+  const state = usePortalGuard();
+  const { logout } = usePortalSession();
+  const router = useRouter();
+  const pathname = usePathname();
 
-  async function handleSignOut() {
-    "use server";
-    await signOut({ redirectTo: "/portal/login" });
-    redirect("/portal/login");
+  if (state.status !== "authenticated") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-mist">
+        <p className="text-sm text-slate">Loading…</p>
+      </div>
+    );
+  }
+
+  function handleSignOut() {
+    logout();
+    router.push("/portal/login");
   }
 
   return (
@@ -35,15 +46,14 @@ export default async function PortalAppLayout({ children }: { children: React.Re
             </span>
           </div>
           <div className="flex items-center gap-4">
-            <FacilitySwitcher memberships={memberships} />
-            <form action={handleSignOut}>
-              <button
-                type="submit"
-                className="rounded-full border border-paper/30 px-4 py-1.5 text-xs font-semibold text-paper/90 hover:bg-paper/10"
-              >
-                Sign out
-              </button>
-            </form>
+            <FacilitySwitcher />
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="rounded-full border border-paper/30 px-4 py-1.5 text-xs font-semibold text-paper/90 hover:bg-paper/10"
+            >
+              Sign out
+            </button>
           </div>
         </div>
         <nav className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-5 pb-2 sm:px-6 lg:px-8">
@@ -52,7 +62,9 @@ export default async function PortalAppLayout({ children }: { children: React.Re
               <Link
                 key={link.href}
                 href={link.href}
-                className="whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold text-paper/80 hover:bg-paper/10 hover:text-paper"
+                className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-paper/10 hover:text-paper ${
+                  pathname?.startsWith(link.href) ? "bg-paper/10 text-paper" : "text-paper/80"
+                }`}
               >
                 {link.label}
               </Link>

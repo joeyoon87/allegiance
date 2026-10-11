@@ -1,14 +1,22 @@
-import type { Metadata } from "next";
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { requireFacilitySession, canCreateRides } from "@/lib/portal/permissions";
-import { getActiveFacilityId } from "@/lib/portal/activeFacility";
-import { prisma } from "@/lib/db";
+import { usePortalSession, canCreateRides } from "@/lib/portal/session";
+import { apiFetch } from "@/lib/api";
 import { StatusBadge } from "@/components/portal/StatusBadge";
-import type { RideRequestStatus } from "@prisma/client";
 
-export const metadata: Metadata = { title: "Rides", robots: { index: false } };
+type RideRow = {
+  id: string;
+  publicRequestNumber: string;
+  patientName: string;
+  appointmentDateTime: string;
+  serviceType: string;
+  tripType: string;
+  status: string;
+};
 
-const STATUS_FILTERS: { value: RideRequestStatus | "ALL"; label: string }[] = [
+const STATUS_FILTERS = [
   { value: "ALL", label: "All" },
   { value: "SUBMITTED", label: "Submitted" },
   { value: "UNDER_REVIEW", label: "Under Review" },
@@ -16,54 +24,53 @@ const STATUS_FILTERS: { value: RideRequestStatus | "ALL"; label: string }[] = [
   { value: "CONFIRMED", label: "Confirmed" },
   { value: "COMPLETED", label: "Completed" },
   { value: "CANCELED", label: "Canceled" },
-];
+] as const;
 
 const PAGE_SIZE = 20;
 
-export default async function PortalRidesPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ status?: string; page?: string; q?: string }>;
-}) {
-  const { memberships } = await requireFacilitySession();
-  const facilityId = await getActiveFacilityId(memberships);
-  const membership = memberships.find((m) => m.facilityId === facilityId)!;
+export default function PortalRidesPage() {
+  const { state, activeFacilityId, activeMembership } = usePortalSession();
+  const [rides, setRides] = useState<RideRow[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [status, setStatus] = useState("ALL");
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState<string | null>(null);
 
-  const { status, page: pageParam, q } = await searchParams;
-  const page = Math.max(1, Number(pageParam) || 1);
-  const statusFilter = STATUS_FILTERS.some((f) => f.value === status) ? status : "ALL";
+  useEffect(() => {
+    if (!activeFacilityId) return;
+    let cancelled = false;
+    const params = new URLSearchParams({ facilityId: activeFacilityId, page: String(page) });
+    if (status !== "ALL") params.set("status", status);
+    if (q) params.set("q", q);
 
-  const where = {
-    facilityId,
-    ...(statusFilter !== "ALL" ? { status: statusFilter as RideRequestStatus } : {}),
-    ...(q
-      ? {
-          OR: [
-            { publicRequestNumber: { contains: q, mode: "insensitive" as const } },
-            { patient: { name: { contains: q, mode: "insensitive" as const } } },
-          ],
-        }
-      : {}),
-  };
+    apiFetch<{ rides: RideRow[]; total: number }>(`/portal/rides?${params}`, { auth: true }).then(
+      (data) => {
+        if (cancelled) return;
+        setRides(data.rides);
+        setTotal(data.total);
+        setError(null);
+      },
+      () => {
+        if (cancelled) return;
+        setRides(null);
+        setError("Couldn't load rides.");
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFacilityId, status, q, page]);
 
-  const [rides, total] = await Promise.all([
-    prisma.rideRequest.findMany({
-      where,
-      include: { patient: true },
-      orderBy: { appointmentDateTime: "desc" },
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
-    }),
-    prisma.rideRequest.count({ where }),
-  ]);
-
+  if (state.status !== "authenticated") return null;
+  const canCreate = activeMembership ? canCreateRides(activeMembership.role) : false;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <h1 className="text-2xl font-extrabold text-ink">Rides</h1>
-        {canCreateRides(membership.role) && (
+        {canCreate && (
           <Link
             href="/portal/rides/new"
             className="inline-flex items-center justify-center rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-ink hover:bg-gold-dark"
@@ -73,17 +80,23 @@ export default async function PortalRidesPage({
         )}
       </div>
 
-      <form className="flex flex-col gap-3 rounded-2xl border border-line bg-paper p-4 sm:flex-row sm:items-center">
+      <div className="flex flex-col gap-3 rounded-2xl border border-line bg-paper p-4 sm:flex-row sm:items-center">
         <input
           type="search"
-          name="q"
-          defaultValue={q}
+          value={q}
+          onChange={(e) => {
+            setPage(1);
+            setQ(e.target.value);
+          }}
           placeholder="Search by request # or rider name"
           className="flex-1 rounded-lg border border-line px-3 py-2 text-sm focus:border-ink focus:outline-none"
         />
         <select
-          name="status"
-          defaultValue={statusFilter}
+          value={status}
+          onChange={(e) => {
+            setPage(1);
+            setStatus(e.target.value);
+          }}
           className="rounded-lg border border-line px-3 py-2 text-sm focus:border-ink focus:outline-none"
         >
           {STATUS_FILTERS.map((f) => (
@@ -92,16 +105,14 @@ export default async function PortalRidesPage({
             </option>
           ))}
         </select>
-        <button
-          type="submit"
-          className="rounded-lg border border-ink px-4 py-2 text-sm font-semibold text-ink hover:bg-ink hover:text-paper"
-        >
-          Filter
-        </button>
-      </form>
+      </div>
+
+      {error && <p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>}
 
       <div className="rounded-2xl border border-line bg-paper">
-        {rides.length === 0 ? (
+        {!rides ? (
+          <p className="p-8 text-center text-sm text-slate">Loading…</p>
+        ) : rides.length === 0 ? (
           <p className="p-8 text-center text-sm text-slate">No ride requests match these filters.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -120,13 +131,13 @@ export default async function PortalRidesPage({
                 {rides.map((ride) => (
                   <tr key={ride.id} className="border-b border-line/60 last:border-0 hover:bg-mist/50">
                     <td className="p-4 font-semibold text-ink">
-                      <Link href={`/portal/rides/${ride.id}`} className="hover:underline">
+                      <Link href={`/portal/rides/detail?id=${ride.id}`} prefetch={false} className="hover:underline">
                         {ride.publicRequestNumber}
                       </Link>
                     </td>
-                    <td className="p-4 text-ink">{ride.patient.name}</td>
+                    <td className="p-4 text-ink">{ride.patientName}</td>
                     <td className="p-4 text-slate">
-                      {ride.appointmentDateTime.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
+                      {new Date(ride.appointmentDateTime).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
                     </td>
                     <td className="p-4 text-slate">{titleCase(ride.serviceType)}</td>
                     <td className="p-4 text-slate">{ride.tripType === "ROUND_TRIP" ? "Round trip" : "One-way"}</td>
@@ -144,15 +155,15 @@ export default async function PortalRidesPage({
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 text-sm">
           {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-            <Link
+            <button
               key={p}
-              href={`/portal/rides?page=${p}${statusFilter !== "ALL" ? `&status=${statusFilter}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`}
+              onClick={() => setPage(p)}
               className={`rounded-full px-3 py-1.5 font-semibold ${
                 p === page ? "bg-ink text-paper" : "border border-line text-ink hover:bg-mist"
               }`}
             >
               {p}
-            </Link>
+            </button>
           ))}
         </div>
       )}

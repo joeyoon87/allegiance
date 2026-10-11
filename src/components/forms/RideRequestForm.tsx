@@ -1,14 +1,43 @@
 "use client";
 
-import { useActionState } from "react";
-import { submitRideRequest } from "@/lib/forms/actions";
-import { idleFormState } from "@/lib/forms/state";
+import { useState } from "react";
+import { rideRequestSchema } from "@/lib/forms/schema";
+import { idleFormState, formDataToObject, flattenZodErrors, type FormState } from "@/lib/formState";
+import { apiFetch, ApiError } from "@/lib/api";
 import { Field, Select, TextArea, TextInput } from "@/components/ui/fields";
 import { SITE } from "@/lib/constants";
 
 export function RideRequestForm() {
-  const [state, formAction, pending] = useActionState(submitRideRequest, idleFormState);
+  const [state, setState] = useState<FormState>(idleFormState);
+  const [pending, setPending] = useState(false);
   const errors = state.fieldErrors ?? {};
+
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const raw = formDataToObject(formData, ["companionAssistance"]);
+
+    const parsed = rideRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      setState({ status: "error", message: "Please fix the highlighted fields.", fieldErrors: flattenZodErrors(parsed.error) });
+      return;
+    }
+
+    setPending(true);
+    try {
+      await apiFetch("/forms/ride-request", { body: parsed.data });
+      setState({
+        status: "success",
+        message:
+          "Your request has been received. Transportation is not confirmed until Allegiance contacts you. Need a ride today? Call 336-962-7433.",
+      });
+    } catch (err) {
+      const apiErr = err as ApiError;
+      setState({ status: "error", message: apiErr.message, fieldErrors: apiErr.fieldErrors });
+    } finally {
+      setPending(false);
+    }
+  }
 
   if (state.status === "success") {
     return (
@@ -20,7 +49,7 @@ export function RideRequestForm() {
   }
 
   return (
-    <form action={formAction} className="grid gap-5 rounded-2xl border border-line bg-paper p-7 sm:grid-cols-2">
+    <form onSubmit={onSubmit} className="grid gap-5 rounded-2xl border border-line bg-paper p-7 sm:grid-cols-2">
       <Field label="Rider Name" htmlFor="riderName" required error={errors.riderName} className="sm:col-span-2">
         <TextInput id="riderName" name="riderName" required />
       </Field>

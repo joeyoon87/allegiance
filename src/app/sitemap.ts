@@ -1,6 +1,8 @@
 import type { MetadataRoute } from "next";
 import { SITE } from "@/lib/constants";
 
+export const dynamic = "force-static";
+
 const routes = [
   "",
   "/services",

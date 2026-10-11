@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createRideRequest } from "@/lib/portal/actions";
+import { apiFetch, ApiError } from "@/lib/api";
 import { Field, Select, TextArea, TextInput } from "@/components/ui/fields";
 
 type Patient = { id: string; name: string; mobilityRequirements: "AMBULATORY" | "WHEELCHAIR" };
@@ -127,7 +127,8 @@ export function RideRequestWizard({
     setErrorMessage(null);
     setFieldErrors({});
 
-    const result = await createRideRequest(facilityId, {
+    const body = {
+      facilityId,
       submissionKey,
       existingPatientId: values.existingPatientId || undefined,
       newPatientName: values.newPatientName || undefined,
@@ -166,17 +167,21 @@ export function RideRequestWizard({
       postArrivalAssistanceRequested: values.postArrivalAssistanceRequested,
       postArrivalAssistanceNotes: values.postArrivalAssistanceNotes || undefined,
       specialInstructions: values.specialInstructions || undefined,
-    });
+    };
 
-    setSubmitting(false);
-
-    if (!result.success) {
-      setErrorMessage(result.message);
-      setFieldErrors(result.fieldErrors ?? {});
-      return;
+    try {
+      const result = await apiFetch<{ id: string; requestNumber: string }>("/portal/rides", {
+        body,
+        auth: true,
+      });
+      router.push(`/portal/rides/detail?id=${result.id}&submitted=1`);
+    } catch (err) {
+      const apiErr = err as ApiError;
+      setErrorMessage(apiErr.message);
+      setFieldErrors(apiErr.fieldErrors ?? {});
+    } finally {
+      setSubmitting(false);
     }
-
-    router.push(`/portal/rides/${result.id}?submitted=1`);
   }
 
   return (

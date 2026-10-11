@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "allegiance-portal-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-10",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "allegiance_portal",
+      // Filled in by `wrangler d1 create allegiance_portal` during one-time
+      // setup — see businesses/allegiance/projects/website-rebuild/CLAUDE.md
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ],
+
+  // Non-secret config. Secrets (SESSION_SECRET, GOOGLE_MAPS_API_KEY,
+  // MEDIROUTES_API_KEY, MEDIROUTES_CLIENT_ID/SECRET) are set via
+  // `wrangler secret put <NAME>`, never written here.
+  "vars": {
+    // Comma-separated list of origins allowed to call this API.
+    "ALLOWED_ORIGINS": "http://localhost:3000,http://localhost:4321"
+  }
+}

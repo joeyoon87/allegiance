@@ -9,13 +9,7 @@ export const metadata: Metadata = {
   description: "Contact Allegiance Transportation Services — phone, email, and office hours.",
 };
 
-export default async function ContactPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ topic?: string }>;
-}) {
-  const { topic } = await searchParams;
-
+export default function ContactPage() {
   return (
     <>
       <PageHeader
@@ -26,7 +20,7 @@ export default async function ContactPage({
 
       <section className="py-16 lg:py-24">
         <Container className="grid gap-12 lg:grid-cols-[1fr_320px] lg:gap-14">
-          <ContactForm defaultTopic={topic} />
+          <ContactForm />
 
           <aside className="space-y-6">
             <div className="rounded-2xl border border-line bg-mist p-6">

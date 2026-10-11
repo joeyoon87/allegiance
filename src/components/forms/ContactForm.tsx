@@ -1,13 +1,52 @@
 "use client";
 
-import { useActionState } from "react";
-import { submitContactMessage } from "@/lib/forms/actions";
-import { idleFormState } from "@/lib/forms/state";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { contactSchema } from "@/lib/forms/schema";
+import { idleFormState, flattenZodErrors, type FormState } from "@/lib/formState";
+import { apiFetch, ApiError } from "@/lib/api";
 import { Field, TextArea, TextInput } from "@/components/ui/fields";
 
-export function ContactForm({ defaultTopic }: { defaultTopic?: string }) {
-  const [state, formAction, pending] = useActionState(submitContactMessage, idleFormState);
+export function ContactForm() {
+  return (
+    <Suspense fallback={<FormSkeleton />}>
+      <ContactFormInner />
+    </Suspense>
+  );
+}
+
+function FormSkeleton() {
+  return <div className="h-96 animate-pulse rounded-2xl border border-line bg-mist" />;
+}
+
+function ContactFormInner() {
+  const defaultTopic = useSearchParams().get("topic") ?? undefined;
+  const [state, setState] = useState<FormState>(idleFormState);
+  const [pending, setPending] = useState(false);
   const errors = state.fieldErrors ?? {};
+
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const raw = Object.fromEntries(formData.entries());
+
+    const parsed = contactSchema.safeParse(raw);
+    if (!parsed.success) {
+      setState({ status: "error", message: "Please fix the highlighted fields.", fieldErrors: flattenZodErrors(parsed.error) });
+      return;
+    }
+
+    setPending(true);
+    try {
+      await apiFetch("/forms/contact", { body: parsed.data });
+      setState({ status: "success", message: "Thanks for reaching out — we'll be in touch soon." });
+    } catch (err) {
+      const apiErr = err as ApiError;
+      setState({ status: "error", message: apiErr.message, fieldErrors: apiErr.fieldErrors });
+    } finally {
+      setPending(false);
+    }
+  }
 
   if (state.status === "success") {
     return (
@@ -19,7 +58,7 @@ export function ContactForm({ defaultTopic }: { defaultTopic?: string }) {
   }
 
   return (
-    <form action={formAction} className="grid gap-5 rounded-2xl border border-line bg-paper p-7">
+    <form onSubmit={onSubmit} className="grid gap-5 rounded-2xl border border-line bg-paper p-7">
       <input type="hidden" name="topic" value={defaultTopic ?? "general"} />
 
       <div className="grid gap-5 sm:grid-cols-2">

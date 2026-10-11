@@ -1,32 +1,31 @@
-import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { requireFacilitySession, canCreateRides } from "@/lib/portal/permissions";
-import { getActiveFacilityId } from "@/lib/portal/activeFacility";
-import { prisma } from "@/lib/db";
+"use client";
+
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { usePortalSession, canCreateRides } from "@/lib/portal/session";
+import { apiFetch } from "@/lib/api";
 import { RideRequestWizard } from "@/components/portal/RideRequestWizard";
 
-export const metadata: Metadata = { title: "Schedule Transportation", robots: { index: false } };
+type Patient = { id: string; name: string; mobilityRequirements: "AMBULATORY" | "WHEELCHAIR" };
 
-export default async function NewRideRequestPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ type?: string }>;
-}) {
-  const { memberships } = await requireFacilitySession();
-  const facilityId = await getActiveFacilityId(memberships);
-  const membership = memberships.find((m) => m.facilityId === facilityId)!;
+function NewRideRequestContent() {
+  const { state, activeFacilityId, activeMembership } = usePortalSession();
+  const searchParams = useSearchParams();
+  const defaultTransitionalCare = searchParams.get("type") === "transitional-care";
+  const [patients, setPatients] = useState<Patient[] | null>(null);
 
-  if (!canCreateRides(membership.role)) {
-    notFound();
+  useEffect(() => {
+    if (!activeFacilityId) return;
+    apiFetch<Patient[]>(`/portal/patients?facilityId=${activeFacilityId}`, { auth: true })
+      .then(setPatients)
+      .catch(() => setPatients([]));
+  }, [activeFacilityId]);
+
+  if (state.status !== "authenticated" || !activeFacilityId) return null;
+
+  if (activeMembership && !canCreateRides(activeMembership.role)) {
+    return <p className="text-sm text-slate">Your role doesn&rsquo;t have permission to request transportation.</p>;
   }
-
-  const { type } = await searchParams;
-
-  const patients = await prisma.patient.findMany({
-    where: { facilityId },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true, mobilityRequirements: true },
-  });
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -36,11 +35,23 @@ export default async function NewRideRequestPage({
         will review it and confirm availability and pickup time.
       </p>
 
-      <RideRequestWizard
-        facilityId={facilityId}
-        patients={patients}
-        defaultTransitionalCare={type === "transitional-care"}
-      />
+      {patients === null ? (
+        <p className="mt-8 text-sm text-slate">Loading…</p>
+      ) : (
+        <RideRequestWizard
+          facilityId={activeFacilityId}
+          patients={patients}
+          defaultTransitionalCare={defaultTransitionalCare}
+        />
+      )}
     </div>
+  );
+}
+
+export default function NewRideRequestPage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-slate">Loading…</p>}>
+      <NewRideRequestContent />
+    </Suspense>
   );
 }

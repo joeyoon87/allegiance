@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Re-add node_modules (providing this array overrides the built-in
+    // default ignores, which normally covers this) — without it ESLint
+    // scans vendored/bundled code here and in worker/node_modules.
+    "**/node_modules/**",
+    // The Worker is a separate project with its own lint/build pipeline.
+    "worker/**",
   ]),
 ]);
 
